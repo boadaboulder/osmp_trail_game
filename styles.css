@@ -1,0 +1,191 @@
+:root {
+  --bg: #f7f5f2;
+  --paper: #fbfaf5;
+  --surface: #ffffff;
+  --text: #1f2933;
+  --muted: #5b6670;
+  --border: #d6d9de;
+  --accent: #0072b2;
+  --accent-alt: #009e73;
+  --warning: #e69f00;
+  --danger: #d55e00;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.app-header {
+  padding: 1rem 1.25rem 0.5rem;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.9rem;
+  letter-spacing: 0.02em;
+}
+
+.purpose,
+.generated,
+.day-key,
+.attempts,
+.reveal {
+  margin: 0.35rem 0;
+  color: var(--muted);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem 1.25rem;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.controls {
+  padding: 1rem;
+}
+
+.controls h2,
+.controls h3 {
+  margin-top: 0;
+}
+
+.hard-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.55rem 0 0.75rem;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.hard-mode-toggle input {
+  accent-color: var(--accent);
+}
+
+label {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-weight: 600;
+}
+
+.guess-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+}
+
+input[type="text"],
+select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  font-size: 1rem;
+  background: #ffffff;
+  color: var(--text);
+}
+
+select:disabled {
+  background: #f1f2f4;
+  color: var(--muted);
+}
+
+button {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  border-radius: 8px;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.status {
+  min-height: 1.6rem;
+  margin: 0.9rem 0;
+  font-weight: 600;
+}
+
+.status.error {
+  color: var(--danger);
+}
+
+.status.success {
+  color: var(--accent-alt);
+}
+
+.status.warning {
+  color: var(--warning);
+}
+
+.hint {
+  min-height: 1.4rem;
+  margin: 0.2rem 0 0.95rem;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.guess-history {
+  margin: 0;
+  padding-left: 1.15rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.guess-history li {
+  margin: 0.2rem 0;
+}
+
+.guess-history li.correct {
+  color: var(--accent-alt);
+  font-weight: 700;
+}
+
+.guess-history li.incorrect {
+  color: var(--text);
+}
+
+.map-panel {
+  padding: 0.6rem;
+}
+
+.map {
+  width: 100%;
+  min-height: 68vh;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--paper);
+}
+
+.leaflet-container {
+  background: var(--paper);
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .map {
+    min-height: 52vh;
+  }
+}

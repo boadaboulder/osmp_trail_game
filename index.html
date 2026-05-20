@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OSMP Traille</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>OSMP Traille</h1>
+      <p class="purpose">Guess the Boulder Open Space trail before all six reveals are shown.</p>
+      <p class="generated">Session loaded: <span id="generated-date">-</span></p>
+    </header>
+
+    <main class="layout">
+      <section class="panel controls" aria-labelledby="game-heading">
+        <h2 id="game-heading">Daily Puzzle</h2>
+        <p class="day-key">Date key (UTC): <span id="date-key">-</span></p>
+        <p class="attempts">Guesses used: <span id="attempts-used">0</span>/6</p>
+        <p class="reveal">Reveal stage: <span id="reveal-stage">1</span>/6</p>
+
+        <label class="hard-mode-toggle" for="hard-mode-toggle">
+          <input id="hard-mode-toggle" type="checkbox" />
+          Hard mode (no directional hints)
+        </label>
+
+        <form id="guess-form" autocomplete="off">
+          <label for="guess-input">Trail guess</label>
+          <div class="guess-row">
+            <input
+              id="guess-input"
+              name="guess"
+              type="text"
+              list="guess-options"
+              placeholder="Loading trail names..."
+              disabled
+              required
+            />
+            <datalist id="guess-options"></datalist>
+            <button type="submit" disabled>Guess</button>
+          </div>
+        </form>
+
+        <p id="status" class="status" aria-live="polite">Loading trail catalog...</p>
+        <p id="hint" class="hint" aria-live="polite"></p>
+
+        <h3>Guess History</h3>
+        <ul id="guess-history" class="guess-history"></ul>
+      </section>
+
+      <section class="panel map-panel" aria-label="Trail reveal map">
+        <div id="map" class="map" role="application" aria-label="Map showing revealed trail segments"></div>
+      </section>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="app.js"></script>
+  </body>
+</html>
