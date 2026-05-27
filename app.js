@@ -209,14 +209,19 @@ async function initializeGame() {
   const rng = createSeededRandom(rotationSeed);
   state.mapRotation = 45 + Math.floor(rng() * 270); // Random angle between 45-315 degrees
 
+  // Fetch trailhead data (await so marker is available on first render)
+  await fetchTrailheadData().catch((error) => {
+    console.warn("Failed to load trailhead data:", error);
+  });
+
+  // Pre-fetch trivia data so it's ready when game ends
+  fetchTriviaData().catch((error) => {
+    console.warn("Failed to pre-fetch trivia data:", error);
+  });
+
   refreshUi();
   setHint("");
   updateMapForStage(state.revealStage);
-
-  // Fetch trailhead data (non-blocking)
-  fetchTrailheadData().catch((error) => {
-    console.warn("Failed to load trailhead data:", error);
-  });
 
   if (puzzleMode === "longest") {
     setStatus("Test mode active: longest trail selected. Type to filter trail names, then submit your guess.", "warning");
@@ -486,6 +491,7 @@ function buildTrailCatalog(features) {
     const properties = feature.properties || {};
     const trailName = String(properties[FIELD.trailName] || "").trim();
     const trlId = String(properties[FIELD.trlId] || "").trim();
+    const dogReg = String(properties[FIELD.dogReg] || properties.DOGREGGEN || "").trim();
     const normalizedName = normalizeName(trailName);
 
     if (!trailName || !normalizedName) {
@@ -499,6 +505,7 @@ function buildTrailCatalog(features) {
         displayName: trailName,
         normalizedName,
         trlId,
+        dogReg,
         features: [],
       });
     }
@@ -542,13 +549,14 @@ function buildTrailCatalog(features) {
       displayName: trail.displayName,
       normalizedName: trail.normalizedName,
       trlId: trail.trlId,
+      dogReg: trail.dogReg || "Unknown",
       sortKey: `${trail.normalizedName}|${trail.displayName}`,
       stages,
       scatteredStages,
       bounds,
       center: boundsCenter(bounds),
       totalLengthMeters: traversal.totalLength,
-      features: trail.features, // Store original features for trivia data access
+      features: trail.features,
     });
   }
 
@@ -950,67 +958,44 @@ function getUtcDateKey() {
  * Calculate name similarity score between a guess and the correct answer.
  * Returns a ratio of shared words to total words (0.0 to 1.0).
  */
-function nameSimilarityScore(guessName, correctName) {
-  const guessWords = guessName.toLowerCase().split(/\s+/);
-  const correctWords = correctName.toLowerCase().split(/\s+/);
-  
-  const sharedWords = guessWords.filter(word => correctWords.includes(word)).length;
-  const maxWords = Math.max(guessWords.length, correctWords.length);
-  
-  return maxWords > 0 ? sharedWords / maxWords : 0;
-}
-
 /**
- * Calculate the final score based on guesses, name similarity, and trivia.
- * - Base points: 1000
- * - Deduction per wrong guess: -150
- * - Name similarity bonus: up to 50 points per wrong guess
- * - Trivia bonus: 50 points per correct answer (max +200)
+ * Calculate the final score based on guesses and trivia.
+ * Trail guessing: 600 max (100 per guess remaining when solved)
+ * Trivia: 400 max (100 per correct answer)
  */
 function calculateScore() {
-  const BASE_POINTS = 1000;
-  const DEDUCTION_PER_GUESS = 150;
-  const MAX_SIMILARITY_BONUS = 50;
-  const TRIVIA_POINTS = 50;
+  // Trail guessing: 600 max (100 per guess remaining)
+  // Trivia: 400 max (100 per correct answer)
+  const TRAIL_MAX = 600;
+  const POINTS_PER_REMAINING_GUESS = 100;
+  const TRIVIA_POINTS_PER_QUESTION = 100;
 
-  const wrongGuesses = state.guesses.filter(g => !g.correct);
-  const totalWrongGuesses = wrongGuesses.length;
-  
-  // Calculate similarity bonus for wrong guesses
-  let totalSimilarityBonus = 0;
-  if (!state.solved && totalWrongGuesses === MAX_GUESSES) {
-    // Game failed: no similarity bonus
-    totalSimilarityBonus = 0;
+  const guessesUsed = state.guesses.length;
+  const guessesRemaining = MAX_GUESSES - guessesUsed;
+
+  // Trail score: everyone gets points. Solved on guess 1 = 600, guess 2 = 500, etc.
+  // Not solved = 0 trail points
+  let trailScore;
+  if (state.solved) {
+    trailScore = POINTS_PER_REMAINING_GUESS * (guessesRemaining + 1); // +1 because solving counts
   } else {
-    // Game solved: add similarity bonus for wrong guesses
-    wrongGuesses.forEach(guess => {
-      const similarity = nameSimilarityScore(guess.text, state.puzzle.displayName);
-      totalSimilarityBonus += similarity * MAX_SIMILARITY_BONUS;
-    });
+    trailScore = 0;
   }
-  
-  // Calculate trivia bonus
-  const triviaBonus = state.triviaScore * TRIVIA_POINTS;
-  
-  // Calculate final score
-  let score;
-  if (!state.solved && totalWrongGuesses >= MAX_GUESSES) {
-    // Failed to solve: only trivia points
-    score = triviaBonus;
-  } else {
-    // Solved: full scoring formula
-    score = Math.max(0, BASE_POINTS - (totalWrongGuesses * DEDUCTION_PER_GUESS) + totalSimilarityBonus + triviaBonus);
-  }
-  
-  state.score = Math.round(score);
-  
+  trailScore = Math.min(trailScore, TRAIL_MAX);
+
+  // Trivia score: 100 per correct answer
+  const triviaBonus = state.triviaScore * TRIVIA_POINTS_PER_QUESTION;
+
+  state.score = trailScore + triviaBonus;
+
   // Store breakdown for display
   state.scoreBreakdown = {
-    base: BASE_POINTS,
-    wrongGuesses: totalWrongGuesses,
-    deduction: totalWrongGuesses * DEDUCTION_PER_GUESS,
-    similarityBonus: Math.round(totalSimilarityBonus),
-    triviaBonus: triviaBonus,
+    trailScore,
+    trailMax: TRAIL_MAX,
+    triviaBonus,
+    triviaMax: TRIVIA_POINTS_PER_QUESTION * 4,
+    guessesUsed,
+    solved: state.solved,
   };
 }
 
@@ -1023,30 +1008,16 @@ function displayScore() {
   }
 
   const breakdown = state.scoreBreakdown;
-  let breakdownText = "";
-  
-  if (!state.solved && breakdown.wrongGuesses >= MAX_GUESSES) {
-    // Failed: only trivia
-    breakdownText = breakdown.triviaBonus > 0 
-      ? `(Trivia only: +${breakdown.triviaBonus})`
-      : "(No score - puzzle not solved)";
+  let breakdownText;
+
+  if (breakdown.solved) {
+    breakdownText = `Trail: ${breakdown.trailScore}/${breakdown.trailMax} (solved in ${breakdown.guessesUsed}) | Trivia: ${breakdown.triviaBonus}/${breakdown.triviaMax}`;
   } else {
-    // Solved: show full breakdown
-    const parts = [`${breakdown.base}`];
-    if (breakdown.deduction > 0) {
-      parts.push(`-${breakdown.deduction}`);
-    }
-    if (breakdown.similarityBonus > 0) {
-      parts.push(`+${breakdown.similarityBonus}`);
-    }
-    if (breakdown.triviaBonus > 0) {
-      parts.push(`+${breakdown.triviaBonus}`);
-    }
-    breakdownText = `(${parts.join(" ")} = ${state.score})`;
+    breakdownText = `Trail: 0/${breakdown.trailMax} (not solved) | Trivia: ${breakdown.triviaBonus}/${breakdown.triviaMax}`;
   }
-  
+
   dom.scoreDisplay.innerHTML = `
-    <strong>Score: ${state.score}</strong><br>
+    <strong>Score: ${state.score} / ${breakdown.trailMax + breakdown.triviaMax}</strong><br>
     <span class="score-breakdown">${breakdownText}</span>
   `;
 }
@@ -1444,12 +1415,18 @@ function showGameEndPanel() {
 
   // Show trivia panel (only for trail mode)
   if (state.gameMode === "trail") {
-    // Fetch trivia data and show trivia panel
-    fetchTriviaData().then(() => {
+    // Trivia data was pre-fetched at init; if missing, try once more
+    const triviaReady = state.managementAreas.length || state.wildlifeClosures.length;
+    if (!triviaReady) {
+      fetchTriviaData().then(() => {
+        showTriviaPanel();
+      }).catch((error) => {
+        console.warn("Failed to load trivia data:", error);
+        showTriviaPanel(); // show anyway with what we have
+      });
+    } else {
       showTriviaPanel();
-    }).catch((error) => {
-      console.warn("Failed to load trivia data:", error);
-    });
+    }
   }
 }
 
@@ -1461,17 +1438,11 @@ function showTriviaPanel() {
   state.triviaScore = 0;
   dom.triviaQuestions.innerHTML = "";
 
-  // Get trail data for trivia (puzzle already has features stored)
+  // Get trail data for trivia
   const trail = state.puzzle;
   
-  // Find the first feature to get DOGREGGEN field (field name may be fully qualified or short)
-  let dogReg = "Unknown";
-  if (trail.features && trail.features.length > 0) {
-    const trailFeature = trail.features[0];
-    dogReg = trailFeature?.properties?.[FIELD.dogReg]
-      || trailFeature?.properties?.DOGREGGEN
-      || "Unknown";
-  }
+  // Use dogReg stored directly on the catalog entry
+  const dogReg = trail.dogReg || "Unknown";
 
   // Prepare trivia questions
   const questions = [
@@ -1704,14 +1675,10 @@ function shareScore() {
   const scoreLines = [
     `OSMP Traille ${dateKey} ${modeEmoji} ${difficultyEmoji}`,
     guessEmojis,
-    `Score: ${state.score} (${state.guesses.length}/${MAX_GUESSES} guesses)`,
+    `Score: ${state.score}/1000`,
+    `Trail: ${state.scoreBreakdown?.trailScore || 0}/600 | Trivia: ${state.scoreBreakdown?.triviaBonus || 0}/400`,
     `Difficulty: ${difficulty.label}`,
   ];
-
-  // Add trivia score if in trail mode
-  if (state.gameMode === "trail" && state.triviaScore > 0) {
-    scoreLines.push(`Trivia: ${state.triviaScore}/4`);
-  }
 
   const scoreText = scoreLines.join("\n");
 
