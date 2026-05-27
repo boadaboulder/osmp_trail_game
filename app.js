@@ -75,6 +75,7 @@ const MANAGEMENT_AREAS_API_URL =
   "https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/ManagementAreaDesignations/MapServer/0/query" +
   "?where=1%3D1" +
   "&outFields=*" +
+  "&returnGeometry=true" +
   "&outSR=4326" +
   "&f=json";
 
@@ -82,6 +83,7 @@ const WILDLIFE_CLOSURES_API_URL =
   "https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/AllWildlifeClosures/MapServer/5/query" +
   "?where=1%3D1" +
   "&outFields=*" +
+  "&returnGeometry=true" +
   "&outSR=4326" +
   "&f=json";
 
@@ -89,6 +91,7 @@ const TRAILHEAD_API_URL =
   "https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/TrailsNEW/MapServer/0/query" +
   "?where=1%3D1" +
   "&outFields=*" +
+  "&returnGeometry=true" +
   "&outSR=4326" +
   "&f=json";
 
@@ -282,6 +285,7 @@ async function fetchTrailFeatures() {
 
   try {
     const payload = await fetchFeaturePayload(API_URL);
+    console.log(`[OSMP] Trail API returned ${payload.features.length} features, DOGREGGEN sample: ${payload.features[0]?.properties?.["OSMP.TrailsOSMP.DOGREGGEN"]}`);
     return payload.features;
   } catch (error) {
     failures.push(`remote fetch blocked or failed (${error.message})`);
@@ -289,6 +293,7 @@ async function fetchTrailFeatures() {
 
   try {
     const payload = await fetchFeaturePayload(LOCAL_DATA_URL);
+    console.warn("[OSMP] Fell back to local trail snapshot (no DOGREGGEN)");
     setStatus("Using local trail snapshot because remote fetch was unavailable.", "warning");
     return payload.features;
   } catch (error) {
@@ -299,7 +304,7 @@ async function fetchTrailFeatures() {
 }
 
 async function fetchFeaturePayload(url) {
-  const response = await fetch(url, { cache: "no-store" });
+  const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`request failed with status ${response.status}`);
   }
@@ -314,7 +319,7 @@ async function fetchFeaturePayload(url) {
 
 async function fetchTrailheadData() {
   try {
-    const response = await fetch(TRAILHEAD_API_URL, { cache: "no-store" });
+    const response = await fetch(TRAILHEAD_API_URL);
     if (!response.ok) {
       throw new Error(`request failed with status ${response.status}`);
     }
@@ -332,6 +337,7 @@ async function fetchTrailheadData() {
         accessId: feature.attributes?.ACCESSID,
         coords: [feature.geometry.x, feature.geometry.y], // [lng, lat]
       }));
+    console.log(`[OSMP] Loaded ${state.trailheads.length} trailheads`);
   } catch (error) {
     console.warn("Trailhead data unavailable:", error);
     state.trailheads = [];
@@ -359,7 +365,7 @@ function findClosestTrailhead(trailCenter) {
 
 async function fetchPropertyData() {
   try {
-    const response = await fetch(PROPERTY_API_URL, { cache: "no-store" });
+    const response = await fetch(PROPERTY_API_URL);
     if (!response.ok) {
       throw new Error(`request failed with status ${response.status}`);
     }
@@ -422,12 +428,15 @@ function selectProperty(properties, dateKey) {
 async function fetchTriviaData() {
   // Fetch management areas
   try {
-    const response = await fetch(MANAGEMENT_AREAS_API_URL, { cache: "no-store" });
+    const response = await fetch(MANAGEMENT_AREAS_API_URL);
+    console.log(`[OSMP] Management areas response status: ${response.status}`);
     if (response.ok) {
       const payload = await response.json();
+      console.log(`[OSMP] Management areas raw features: ${payload?.features?.length || 0}`);
       if (payload && Array.isArray(payload.features)) {
-        state.managementAreas = payload.features
-          .filter((feature) => feature.geometry && feature.geometry.rings && feature.geometry.rings.length > 0)
+        const withGeometry = payload.features.filter((feature) => feature.geometry && feature.geometry.rings && feature.geometry.rings.length > 0);
+        console.log(`[OSMP] Management areas with geometry: ${withGeometry.length}`);
+        state.managementAreas = withGeometry
           .map((feature) => {
             const rings = feature.geometry.rings[0]; // Outer ring in [lng, lat]
             let sumLng = 0;
@@ -451,15 +460,19 @@ async function fetchTriviaData() {
     console.warn("Management areas unavailable:", error);
     state.managementAreas = [];
   }
+  console.log(`[OSMP] Management areas loaded: ${state.managementAreas.length}`);
 
   // Fetch wildlife closures
   try {
-    const response = await fetch(WILDLIFE_CLOSURES_API_URL, { cache: "no-store" });
+    const response = await fetch(WILDLIFE_CLOSURES_API_URL);
+    console.log(`[OSMP] Wildlife closures response status: ${response.status}`);
     if (response.ok) {
       const payload = await response.json();
+      console.log(`[OSMP] Wildlife closures raw features: ${payload?.features?.length || 0}`);
       if (payload && Array.isArray(payload.features)) {
-        state.wildlifeClosures = payload.features
-          .filter((feature) => feature.geometry && feature.geometry.rings && feature.geometry.rings.length > 0)
+        const withGeometry = payload.features.filter((feature) => feature.geometry && feature.geometry.rings && feature.geometry.rings.length > 0);
+        console.log(`[OSMP] Wildlife closures with geometry: ${withGeometry.length}`);
+        state.wildlifeClosures = withGeometry
           .map((feature) => {
             const rings = feature.geometry.rings[0]; // Outer ring in [lng, lat]
             let sumLng = 0;
@@ -482,6 +495,7 @@ async function fetchTriviaData() {
     console.warn("Wildlife closures unavailable:", error);
     state.wildlifeClosures = [];
   }
+  console.log(`[OSMP] Wildlife closures loaded: ${state.wildlifeClosures.length}`);
 }
 
 function buildTrailCatalog(features) {
@@ -1165,6 +1179,7 @@ function updateMapForStage(stageNumber) {
 
   if (state.gameMode === "trail" && difficulty.showTrailhead && state.trailheads.length) {
     const closestTrailhead = findClosestTrailhead(state.puzzle.center);
+    console.log(`[OSMP] Closest trailhead: ${closestTrailhead?.name} for puzzle center: ${state.puzzle.center}`);
     if (closestTrailhead) {
       state.trailheadMarker = L.marker([closestTrailhead.coords[1], closestTrailhead.coords[0]], {
         icon: L.icon({
@@ -1229,7 +1244,17 @@ function updateMapForStage(stageNumber) {
     // Keep scale anchored to the final trail footprint, not the currently revealed subset.
     const fullBounds = state.puzzle.bounds;
     if (fullBounds) {
-      map.fitBounds(fullBounds, {
+      const mapBounds = L.latLngBounds(
+        [fullBounds[0][0], fullBounds[0][1]],
+        [fullBounds[1][0], fullBounds[1][1]]
+      );
+
+      // Extend bounds to include trailhead marker if visible
+      if (difficulty.showTrailhead && state.trailheadMarker) {
+        mapBounds.extend(state.trailheadMarker.getLatLng());
+      }
+
+      map.fitBounds(mapBounds, {
         padding: [24, 24],
         animate: false,
       });
