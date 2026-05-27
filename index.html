@@ -21,15 +21,19 @@
 
     <main class="layout">
       <section class="panel controls" aria-labelledby="game-heading">
-        <h2 id="game-heading">Daily Puzzle</h2>
+        <h2 id="game-heading">Daily Puzzle <span id="game-mode-badge" class="game-mode-badge"></span></h2>
         <p class="day-key">Date key (UTC): <span id="date-key">-</span></p>
         <p class="attempts">Guesses used: <span id="attempts-used">0</span>/6</p>
         <p class="reveal">Reveal stage: <span id="reveal-stage">1</span>/6</p>
 
-        <label class="hard-mode-toggle" for="hard-mode-toggle">
-          <input id="hard-mode-toggle" type="checkbox" />
-          Hard mode (no directional hints)
-        </label>
+        <label for="difficulty-select">Difficulty</label>
+        <select id="difficulty-select">
+          <option value="young-to-hike">I'm Too Young to Hike</option>
+          <option value="not-too-steep">Hey, Not Too Steep</option>
+          <option value="hike-me-plenty" selected>Hike Me Plenty</option>
+          <option value="ultra-vertical">Ultra-Vertical</option>
+          <option value="nighthike">Nighthike!</option>
+        </select>
 
         <form id="guess-form" autocomplete="off">
           <label for="guess-input">Trail guess</label>
@@ -53,6 +57,22 @@
 
         <h3>Guess History</h3>
         <ul id="guess-history" class="guess-history"></ul>
+
+        <div id="game-end-panel" class="game-end-panel" hidden>
+          <h3>Puzzle Complete</h3>
+          <p id="score-display" class="score-display"></p>
+          <p>
+            <a id="osmp-link" href="#" target="_blank" rel="noopener noreferrer">View on OSMP Trails Map</a>
+          </p>
+          <button id="share-btn" class="share-btn">Share Score</button>
+          <p id="share-feedback" class="share-feedback" hidden>Copied!</p>
+        </div>
+
+        <div id="trivia-panel" class="trivia-panel" hidden>
+          <h3>Trivia Challenge</h3>
+          <div id="trivia-questions"></div>
+          <p id="trivia-score-display" class="trivia-score" hidden></p>
+        </div>
       </section>
 
       <section class="panel map-panel" aria-label="Trail reveal map">

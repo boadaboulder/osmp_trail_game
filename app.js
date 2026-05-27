@@ -2,18 +2,95 @@ const STAGE_COUNT = 6;
 const MAX_GUESSES = 6;
 
 const FIELD = {
-  trailId: "OSMP.TrailsOSMP.TRLID",
+  trlId: "OSMP.TrailsOSMP.TRLID",
   trailName: "OSMP.TrailsOSMP.TRAILNAME",
   objectId: "OSMP.TrailsOSMP.OBJECTID",
+  dogReg: "OSMP.TrailsOSMP.DOGREGGEN",
+};
+
+const DIFFICULTY = {
+  "young-to-hike": {
+    id: "young-to-hike",
+    label: "I'm Too Young to Hike",
+    showBaseMap: true,
+    showTrailhead: true,
+    showHints: true,
+    contiguous: true,
+    northUp: true,
+  },
+  "not-too-steep": {
+    id: "not-too-steep",
+    label: "Hey, Not Too Steep",
+    showBaseMap: false,
+    showTrailhead: true,
+    showHints: true,
+    contiguous: true,
+    northUp: true,
+  },
+  "hike-me-plenty": {
+    id: "hike-me-plenty",
+    label: "Hike Me Plenty",
+    showBaseMap: false,
+    showTrailhead: false,
+    showHints: true,
+    contiguous: true,
+    northUp: true,
+  },
+  "ultra-vertical": {
+    id: "ultra-vertical",
+    label: "Ultra-Vertical",
+    showBaseMap: false,
+    showTrailhead: false,
+    showHints: false,
+    contiguous: true,
+    northUp: true,
+  },
+  nighthike: {
+    id: "nighthike",
+    label: "Nighthike!",
+    showBaseMap: false,
+    showTrailhead: false,
+    showHints: false,
+    contiguous: false,
+    northUp: false,
+  },
 };
 
 const API_URL =
   "https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/TrailsNEW/MapServer/4/query" +
   "?where=1%3D1" +
-  "&outFields=OSMP.TrailsOSMP.OBJECTID,OSMP.TrailsOSMP.TRLID,OSMP.TrailsOSMP.TRAILNAME" +
+  "&outFields=OSMP.TrailsOSMP.OBJECTID,OSMP.TrailsOSMP.TRLID,OSMP.TrailsOSMP.TRAILNAME,OSMP.TrailsOSMP.DOGREGGEN" +
   "&returnGeometry=true" +
   "&outSR=4326" +
   "&f=geojson";
+
+const PROPERTY_API_URL =
+  "https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/PropertiesView/MapServer/0/query" +
+  "?where=1%3D1" +
+  "&outFields=*" +
+  "&outSR=4326" +
+  "&f=json";
+
+const MANAGEMENT_AREAS_API_URL =
+  "https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/ManagementAreaDesignations/MapServer/0/query" +
+  "?where=1%3D1" +
+  "&outFields=*" +
+  "&outSR=4326" +
+  "&f=json";
+
+const WILDLIFE_CLOSURES_API_URL =
+  "https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/AllWildlifeClosures/MapServer/5/query" +
+  "?where=1%3D1" +
+  "&outFields=*" +
+  "&outSR=4326" +
+  "&f=json";
+
+const TRAILHEAD_API_URL =
+  "https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/TrailsNEW/MapServer/0/query" +
+  "?where=1%3D1" +
+  "&outFields=*" +
+  "&outSR=4326" +
+  "&f=json";
 
 const LOCAL_DATA_URL = "./data/osmp_trails.geojson";
 
@@ -22,11 +99,21 @@ const state = {
   puzzle: null,
   displayNameByNormalized: new Map(),
   trailByNormalized: new Map(),
-  hardMode: false,
+  difficulty: "hike-me-plenty",
   attemptsUsed: 0,
   revealStage: 1,
   solved: false,
   guesses: [],
+  tileLayer: null,
+  mapRotation: 0,
+  trailheads: [],
+  trailheadMarker: null,
+  properties: [],
+  gameMode: "trail",
+  triviaScore: 0,
+  managementAreas: [],
+  wildlifeClosures: [],
+  score: 0,
 };
 
 const dom = {
@@ -34,13 +121,22 @@ const dom = {
   dateKey: document.getElementById("date-key"),
   attemptsUsed: document.getElementById("attempts-used"),
   revealStage: document.getElementById("reveal-stage"),
-  hardModeToggle: document.getElementById("hard-mode-toggle"),
+  difficultySelect: document.getElementById("difficulty-select"),
   form: document.getElementById("guess-form"),
   input: document.getElementById("guess-input"),
   options: document.getElementById("guess-options"),
   status: document.getElementById("status"),
   hint: document.getElementById("hint"),
   history: document.getElementById("guess-history"),
+  gameEndPanel: document.getElementById("game-end-panel"),
+  osmpLink: document.getElementById("osmp-link"),
+  shareBtn: document.getElementById("share-btn"),
+  shareFeedback: document.getElementById("share-feedback"),
+  gameModeBadge: document.getElementById("game-mode-badge"),
+  triviaPanel: document.getElementById("trivia-panel"),
+  triviaQuestions: document.getElementById("trivia-questions"),
+  triviaScoreDisplay: document.getElementById("trivia-score-display"),
+  scoreDisplay: document.getElementById("score-display"),
 };
 
 let map;
@@ -69,21 +165,64 @@ async function initializeGame() {
 
   catalog.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
   state.catalog = catalog;
-  populateGuessOptions(catalog);
+
+  // Fetch property data (non-blocking, defaults to trail mode if it fails)
+  await fetchPropertyData().catch((error) => {
+    console.warn("Failed to load property data:", error);
+  });
 
   const dateKey = getUtcDateKey();
   dom.dateKey.textContent = dateKey;
   const puzzleMode = getPuzzleMode();
-  state.puzzle = selectPuzzle(catalog, dateKey, puzzleMode);
+
+  // Determine game mode (trail or property) based on date
+  if (puzzleMode === "daily" && state.properties.length > 0) {
+    state.gameMode = determineGameMode(dateKey);
+  } else {
+    state.gameMode = "trail";
+  }
+
+  // Update UI badge
+  if (state.gameMode === "property") {
+    dom.gameModeBadge.textContent = "🏞️ Property Round";
+    dom.gameModeBadge.style.color = "var(--accent-alt)";
+  } else {
+    dom.gameModeBadge.textContent = "🥾 Trail Round";
+    dom.gameModeBadge.style.color = "var(--accent)";
+  }
+
+  // Select puzzle based on game mode
+  if (state.gameMode === "property") {
+    state.puzzle = selectProperty(state.properties, dateKey);
+    state.puzzle.displayName = state.puzzle.name;
+    state.puzzle.center = state.puzzle.centroid;
+    populateGuessOptions(state.properties);
+    dom.input.placeholder = "Type to filter property names";
+  } else {
+    state.puzzle = selectPuzzle(catalog, dateKey, puzzleMode);
+    populateGuessOptions(catalog);
+    dom.input.placeholder = "Type to filter trail names";
+  }
+
+  // Calculate rotation angle for nighthike mode (seeded by dateKey)
+  const rotationSeed = hashString(dateKey + "-rotation");
+  const rng = createSeededRandom(rotationSeed);
+  state.mapRotation = 45 + Math.floor(rng() * 270); // Random angle between 45-315 degrees
 
   refreshUi();
   setHint("");
   updateMapForStage(state.revealStage);
 
+  // Fetch trailhead data (non-blocking)
+  fetchTrailheadData().catch((error) => {
+    console.warn("Failed to load trailhead data:", error);
+  });
+
   if (puzzleMode === "longest") {
     setStatus("Test mode active: longest trail selected. Type to filter trail names, then submit your guess.", "warning");
   } else {
-    setStatus("Daily puzzle ready. Type to filter trail names, then submit your guess.", "warning");
+    const modeLabel = state.gameMode === "property" ? "property" : "trail";
+    setStatus(`Daily puzzle ready. Type to filter ${modeLabel} names, then submit your guess.`, "warning");
   }
 }
 
@@ -121,10 +260,15 @@ function bindEvents() {
     submitGuess();
   });
 
-  dom.hardModeToggle.addEventListener("change", () => {
-    state.hardMode = dom.hardModeToggle.checked;
+  dom.difficultySelect.addEventListener("change", () => {
+    state.difficulty = dom.difficultySelect.value;
     setHint("");
     refreshUi();
+    updateMapForStage(state.revealStage);
+  });
+
+  dom.shareBtn.addEventListener("click", () => {
+    shareScore();
   });
 }
 
@@ -163,12 +307,185 @@ async function fetchFeaturePayload(url) {
   return payload;
 }
 
+async function fetchTrailheadData() {
+  try {
+    const response = await fetch(TRAILHEAD_API_URL, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`request failed with status ${response.status}`);
+    }
+
+    const payload = await response.json();
+    if (!payload || !Array.isArray(payload.features)) {
+      throw new Error("response did not contain features array");
+    }
+
+    // Parse Esri JSON format: features[].geometry = {x: lng, y: lat}
+    state.trailheads = payload.features
+      .filter((feature) => feature.geometry && feature.geometry.x != null && feature.geometry.y != null)
+      .map((feature) => ({
+        name: feature.attributes?.ACCESSNAME || "Unnamed Trailhead",
+        accessId: feature.attributes?.ACCESSID,
+        coords: [feature.geometry.x, feature.geometry.y], // [lng, lat]
+      }));
+  } catch (error) {
+    console.warn("Trailhead data unavailable:", error);
+    state.trailheads = [];
+  }
+}
+
+function findClosestTrailhead(trailCenter) {
+  if (!state.trailheads.length || !trailCenter) {
+    return null;
+  }
+
+  let closest = null;
+  let minDistance = Infinity;
+
+  for (const trailhead of state.trailheads) {
+    const distance = haversineMeters(trailCenter, trailhead.coords);
+    if (distance < minDistance) {
+      minDistance = distance;
+      closest = trailhead;
+    }
+  }
+
+  return closest;
+}
+
+async function fetchPropertyData() {
+  try {
+    const response = await fetch(PROPERTY_API_URL, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`request failed with status ${response.status}`);
+    }
+
+    const payload = await response.json();
+    if (!payload || !Array.isArray(payload.features)) {
+      throw new Error("response did not contain features array");
+    }
+
+    // Parse Esri JSON format: features[].geometry.rings = polygon coordinates [lng, lat]
+    // Need to flip to [lat, lng] for Leaflet
+    state.properties = payload.features
+      .filter((feature) => feature.geometry && feature.geometry.rings && feature.geometry.rings.length > 0)
+      .map((feature) => {
+        const rings = feature.geometry.rings.map((ring) =>
+          ring.map((point) => [point[1], point[0]]) // Flip from [lng, lat] to [lat, lng]
+        );
+        
+        // Calculate centroid from outer ring (rings[0])
+        const outerRing = feature.geometry.rings[0];
+        let sumLng = 0;
+        let sumLat = 0;
+        for (const point of outerRing) {
+          sumLng += point[0];
+          sumLat += point[1];
+        }
+        const centroid = [sumLng / outerRing.length, sumLat / outerRing.length];
+
+        return {
+          name: feature.attributes?.PropertyName || "Unnamed Property",
+          normalizedName: normalizeName(feature.attributes?.PropertyName || ""),
+          rings, // Leaflet-compatible [lat, lng] format
+          centroid, // [lng, lat] for calculations
+        };
+      })
+      .filter((prop) => prop.normalizedName); // Filter out unnamed properties
+  } catch (error) {
+    console.warn("Property data unavailable:", error);
+    state.properties = [];
+  }
+}
+
+function determineGameMode(dateKey) {
+  // Hash the date key to determine if this should be a property round
+  const hash = Math.abs(hashString(dateKey + "-mode"));
+  // About 2 days per week should be property rounds
+  return hash % 7 < 2 ? "property" : "trail";
+}
+
+function selectProperty(properties, dateKey) {
+  if (!properties.length) {
+    return null;
+  }
+
+  const seed = Math.abs(hashString(dateKey + "-property"));
+  const index = seed % properties.length;
+  return properties[index];
+}
+
+async function fetchTriviaData() {
+  // Fetch management areas
+  try {
+    const response = await fetch(MANAGEMENT_AREAS_API_URL, { cache: "no-store" });
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload && Array.isArray(payload.features)) {
+        state.managementAreas = payload.features
+          .filter((feature) => feature.geometry && feature.geometry.rings && feature.geometry.rings.length > 0)
+          .map((feature) => {
+            const rings = feature.geometry.rings[0]; // Outer ring in [lng, lat]
+            let sumLng = 0;
+            let sumLat = 0;
+            for (const point of rings) {
+              sumLng += point[0];
+              sumLat += point[1];
+            }
+            const centroid = [sumLng / rings.length, sumLat / rings.length];
+
+            return {
+              name: feature.attributes?.Name || "Unnamed Area",
+              managementArea: feature.attributes?.ManagementArea,
+              centroid,
+              rings: feature.geometry.rings,
+            };
+          });
+      }
+    }
+  } catch (error) {
+    console.warn("Management areas unavailable:", error);
+    state.managementAreas = [];
+  }
+
+  // Fetch wildlife closures
+  try {
+    const response = await fetch(WILDLIFE_CLOSURES_API_URL, { cache: "no-store" });
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload && Array.isArray(payload.features)) {
+        state.wildlifeClosures = payload.features
+          .filter((feature) => feature.geometry && feature.geometry.rings && feature.geometry.rings.length > 0)
+          .map((feature) => {
+            const rings = feature.geometry.rings[0]; // Outer ring in [lng, lat]
+            let sumLng = 0;
+            let sumLat = 0;
+            for (const point of rings) {
+              sumLng += point[0];
+              sumLat += point[1];
+            }
+            const centroid = [sumLng / rings.length, sumLat / rings.length];
+
+            return {
+              name: feature.attributes?.ClosureName || "Unnamed Closure",
+              species: feature.attributes?.Species,
+              centroid,
+            };
+          });
+      }
+    }
+  } catch (error) {
+    console.warn("Wildlife closures unavailable:", error);
+    state.wildlifeClosures = [];
+  }
+}
+
 function buildTrailCatalog(features) {
   const groups = new Map();
 
   for (const feature of features) {
     const properties = feature.properties || {};
     const trailName = String(properties[FIELD.trailName] || "").trim();
+    const trlId = String(properties[FIELD.trlId] || "").trim();
     const normalizedName = normalizeName(trailName);
 
     if (!trailName || !normalizedName) {
@@ -181,6 +498,7 @@ function buildTrailCatalog(features) {
         id: groupKey,
         displayName: trailName,
         normalizedName,
+        trlId,
         features: [],
       });
     }
@@ -209,6 +527,7 @@ function buildTrailCatalog(features) {
     }
 
     const stages = buildRevealStages(traversal.orderedEdges, STAGE_COUNT);
+    const scatteredStages = buildScatteredStages(traversal.orderedEdges, STAGE_COUNT, trail.normalizedName);
     if (stages.length !== STAGE_COUNT) {
       continue;
     }
@@ -222,11 +541,14 @@ function buildTrailCatalog(features) {
       id: trail.id,
       displayName: trail.displayName,
       normalizedName: trail.normalizedName,
+      trlId: trail.trlId,
       sortKey: `${trail.normalizedName}|${trail.displayName}`,
       stages,
+      scatteredStages,
       bounds,
       center: boundsCenter(bounds),
       totalLengthMeters: traversal.totalLength,
+      features: trail.features, // Store original features for trivia data access
     });
   }
 
@@ -470,6 +792,51 @@ function buildRevealStages(orderedEdges, stageCount) {
   return stages;
 }
 
+function buildScatteredStages(orderedEdges, stageCount, seed) {
+  // Create a shuffled order for edges using the seed
+  const shuffledIndices = orderedEdges.map((_, i) => i);
+  const rng = createSeededRandom(hashString(seed));
+  
+  // Fisher-Yates shuffle with seeded random
+  for (let i = shuffledIndices.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [shuffledIndices[i], shuffledIndices[j]] = [shuffledIndices[j], shuffledIndices[i]];
+  }
+  
+  const shuffledEdges = shuffledIndices.map(i => orderedEdges[i]);
+  const totalLength = shuffledEdges.reduce((sum, edge) => sum + edge.length, 0);
+  
+  if (totalLength <= 0) {
+    return [];
+  }
+  
+  const stages = [];
+  
+  for (let stageIndex = 0; stageIndex < stageCount; stageIndex += 1) {
+    const target = stageIndex === stageCount - 1 ? totalLength : ((stageIndex + 1) * totalLength) / stageCount;
+    const stageLines = buildLinesUpToDistance(shuffledEdges, target);
+    
+    stages.push({
+      stage: stageIndex + 1,
+      revealedLength: target,
+      geometry: {
+        type: "MultiLineString",
+        coordinates: stageLines,
+      },
+    });
+  }
+  
+  return stages;
+}
+
+function createSeededRandom(seed) {
+  let state = seed;
+  return function() {
+    state = (state * 1103515245 + 12345) & 0x7fffffff;
+    return state / 0x7fffffff;
+  };
+}
+
 function buildLinesUpToDistance(orderedEdges, targetDistanceMeters) {
   const lines = [];
   let remaining = targetDistanceMeters;
@@ -579,6 +946,111 @@ function getUtcDateKey() {
   return `${year}-${month}-${day}`;
 }
 
+/**
+ * Calculate name similarity score between a guess and the correct answer.
+ * Returns a ratio of shared words to total words (0.0 to 1.0).
+ */
+function nameSimilarityScore(guessName, correctName) {
+  const guessWords = guessName.toLowerCase().split(/\s+/);
+  const correctWords = correctName.toLowerCase().split(/\s+/);
+  
+  const sharedWords = guessWords.filter(word => correctWords.includes(word)).length;
+  const maxWords = Math.max(guessWords.length, correctWords.length);
+  
+  return maxWords > 0 ? sharedWords / maxWords : 0;
+}
+
+/**
+ * Calculate the final score based on guesses, name similarity, and trivia.
+ * - Base points: 1000
+ * - Deduction per wrong guess: -150
+ * - Name similarity bonus: up to 50 points per wrong guess
+ * - Trivia bonus: 50 points per correct answer (max +200)
+ */
+function calculateScore() {
+  const BASE_POINTS = 1000;
+  const DEDUCTION_PER_GUESS = 150;
+  const MAX_SIMILARITY_BONUS = 50;
+  const TRIVIA_POINTS = 50;
+
+  const wrongGuesses = state.guesses.filter(g => !g.correct);
+  const totalWrongGuesses = wrongGuesses.length;
+  
+  // Calculate similarity bonus for wrong guesses
+  let totalSimilarityBonus = 0;
+  if (!state.solved && totalWrongGuesses === MAX_GUESSES) {
+    // Game failed: no similarity bonus
+    totalSimilarityBonus = 0;
+  } else {
+    // Game solved: add similarity bonus for wrong guesses
+    wrongGuesses.forEach(guess => {
+      const similarity = nameSimilarityScore(guess.text, state.puzzle.displayName);
+      totalSimilarityBonus += similarity * MAX_SIMILARITY_BONUS;
+    });
+  }
+  
+  // Calculate trivia bonus
+  const triviaBonus = state.triviaScore * TRIVIA_POINTS;
+  
+  // Calculate final score
+  let score;
+  if (!state.solved && totalWrongGuesses >= MAX_GUESSES) {
+    // Failed to solve: only trivia points
+    score = triviaBonus;
+  } else {
+    // Solved: full scoring formula
+    score = Math.max(0, BASE_POINTS - (totalWrongGuesses * DEDUCTION_PER_GUESS) + totalSimilarityBonus + triviaBonus);
+  }
+  
+  state.score = Math.round(score);
+  
+  // Store breakdown for display
+  state.scoreBreakdown = {
+    base: BASE_POINTS,
+    wrongGuesses: totalWrongGuesses,
+    deduction: totalWrongGuesses * DEDUCTION_PER_GUESS,
+    similarityBonus: Math.round(totalSimilarityBonus),
+    triviaBonus: triviaBonus,
+  };
+}
+
+/**
+ * Display the score in the game end panel with breakdown.
+ */
+function displayScore() {
+  if (!dom.scoreDisplay) {
+    return;
+  }
+
+  const breakdown = state.scoreBreakdown;
+  let breakdownText = "";
+  
+  if (!state.solved && breakdown.wrongGuesses >= MAX_GUESSES) {
+    // Failed: only trivia
+    breakdownText = breakdown.triviaBonus > 0 
+      ? `(Trivia only: +${breakdown.triviaBonus})`
+      : "(No score - puzzle not solved)";
+  } else {
+    // Solved: show full breakdown
+    const parts = [`${breakdown.base}`];
+    if (breakdown.deduction > 0) {
+      parts.push(`-${breakdown.deduction}`);
+    }
+    if (breakdown.similarityBonus > 0) {
+      parts.push(`+${breakdown.similarityBonus}`);
+    }
+    if (breakdown.triviaBonus > 0) {
+      parts.push(`+${breakdown.triviaBonus}`);
+    }
+    breakdownText = `(${parts.join(" ")} = ${state.score})`;
+  }
+  
+  dom.scoreDisplay.innerHTML = `
+    <strong>Score: ${state.score}</strong><br>
+    <span class="score-breakdown">${breakdownText}</span>
+  `;
+}
+
 function submitGuess() {
   if (!state.puzzle || state.solved || state.attemptsUsed >= MAX_GUESSES) {
     return;
@@ -586,27 +1058,34 @@ function submitGuess() {
 
   const rawGuess = dom.input.value.trim();
   const normalized = normalizeName(rawGuess);
+  const itemType = state.gameMode === "property" ? "property" : "trail";
 
   if (!normalized) {
-    setStatus("Type and select a trail name before submitting.", "warning");
+    setStatus(`Type and select a ${itemType} name before submitting.`, "warning");
     return;
   }
 
   if (!state.displayNameByNormalized.has(normalized)) {
-    setStatus("Pick a valid trail from the dropdown list.", "warning");
+    setStatus(`Pick a valid ${itemType} from the dropdown list.`, "warning");
     return;
   }
 
   if (state.guesses.some((guess) => guess.normalized === normalized)) {
-    setStatus("You already guessed that trail name.", "warning");
+    setStatus(`You already guessed that ${itemType} name.`, "warning");
     return;
   }
 
   const guessLabel = state.displayNameByNormalized.get(normalized);
-  const guessedTrail = state.trailByNormalized.get(normalized);
+  const guessedItem = state.trailByNormalized.get(normalized);
   const correct = normalized === state.puzzle.normalizedName;
-  const hintText = !correct && !state.hardMode ? buildDirectionalHint(guessedTrail, state.puzzle) : "";
+  const difficulty = DIFFICULTY[state.difficulty];
+  const hintText = !correct && difficulty.showHints ? buildDirectionalHint(guessedItem, state.puzzle) : "";
   state.guesses.push({ text: guessLabel, normalized, correct, hint: hintText });
+
+  // Disable difficulty selector after first guess
+  if (state.guesses.length === 1) {
+    dom.difficultySelect.disabled = true;
+  }
 
   if (correct) {
     state.solved = true;
@@ -614,13 +1093,14 @@ function submitGuess() {
     refreshUi();
     setHint("");
     updateMapForStage(state.revealStage);
-    setStatus(`Correct. The trail is ${state.puzzle.displayName}.`, "success");
+    setStatus(`Correct. The ${itemType} is ${state.puzzle.displayName}.`, "success");
     dom.form.querySelector("button").disabled = true;
     dom.input.disabled = true;
+    showGameEndPanel();
     return;
   }
 
-  setHint(state.hardMode ? "" : hintText);
+  setHint(difficulty.showHints ? hintText : "");
 
   state.attemptsUsed += 1;
 
@@ -628,14 +1108,21 @@ function submitGuess() {
     state.revealStage = STAGE_COUNT;
     refreshUi();
     updateMapForStage(state.revealStage);
-    setStatus(`No guesses left. The trail was ${state.puzzle.displayName}.`, "error");
+    setStatus(`No guesses left. The ${itemType} was ${state.puzzle.displayName}.`, "error");
     dom.form.querySelector("button").disabled = true;
     dom.input.disabled = true;
+    showGameEndPanel();
   } else {
-    state.revealStage = Math.min(STAGE_COUNT, state.revealStage + 1);
-    refreshUi();
-    updateMapForStage(state.revealStage);
-    setStatus("Not a match. Next contiguous segment is now revealed.", "warning");
+    if (state.gameMode === "trail") {
+      state.revealStage = Math.min(STAGE_COUNT, state.revealStage + 1);
+      refreshUi();
+      updateMapForStage(state.revealStage);
+      setStatus("Not a match. Next contiguous segment is now revealed.", "warning");
+    } else {
+      // Property mode: no progressive reveal, just show feedback
+      refreshUi();
+      setStatus("Not a match. Try again!", "warning");
+    }
   }
 
   dom.input.value = "";
@@ -646,19 +1133,23 @@ function populateGuessOptions(catalog) {
   state.displayNameByNormalized = new Map();
   state.trailByNormalized = new Map();
 
-  const options = [...catalog].sort((a, b) => a.displayName.localeCompare(b.displayName));
+  const options = [...catalog].sort((a, b) => {
+    const nameA = a.displayName || a.name || "";
+    const nameB = b.displayName || b.name || "";
+    return nameA.localeCompare(nameB);
+  });
 
   dom.options.innerHTML = "";
 
-  for (const trail of options) {
-    const normalized = trail.normalizedName;
-    const displayName = trail.displayName;
+  for (const item of options) {
+    const normalized = item.normalizedName;
+    const displayName = item.displayName || item.name;
     if (!normalized || state.displayNameByNormalized.has(normalized)) {
       continue;
     }
 
     state.displayNameByNormalized.set(normalized, displayName);
-    state.trailByNormalized.set(normalized, trail);
+    state.trailByNormalized.set(normalized, item);
 
     const option = document.createElement("option");
     option.value = displayName;
@@ -666,7 +1157,6 @@ function populateGuessOptions(catalog) {
   }
 
   dom.input.value = "";
-  dom.input.placeholder = "Type to filter trail names";
   dom.input.disabled = false;
   dom.form.querySelector("button").disabled = false;
 }
@@ -676,27 +1166,103 @@ function updateMapForStage(stageNumber) {
     return;
   }
 
+  const difficulty = DIFFICULTY[state.difficulty];
   const clampedStage = Math.max(1, Math.min(stageNumber, STAGE_COUNT));
-  const stage = state.puzzle.stages[clampedStage - 1];
 
   revealLayer.clearLayers();
 
-  const geo = L.geoJSON(stage.geometry, {
-    style: {
-      color: "#0072b2",
-      weight: 5,
-      opacity: 0.95,
-      lineCap: "round",
-    },
-  }).addTo(revealLayer);
+  // Add or remove base map tiles based on difficulty
+  if (difficulty.showBaseMap) {
+    if (!state.tileLayer) {
+      state.tileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "",
+        maxZoom: 19,
+      }).addTo(map);
+    }
+  } else {
+    if (state.tileLayer) {
+      map.removeLayer(state.tileLayer);
+      state.tileLayer = null;
+    }
+  }
 
-  // Keep scale anchored to the final trail footprint, not the currently revealed subset.
-  const fullBounds = state.puzzle.bounds;
-  if (fullBounds) {
-    map.fitBounds(fullBounds, {
+  // Add trailhead marker for difficulty levels with showTrailhead: true (trail mode only)
+  if (state.trailheadMarker) {
+    revealLayer.removeLayer(state.trailheadMarker);
+    state.trailheadMarker = null;
+  }
+
+  if (state.gameMode === "trail" && difficulty.showTrailhead && state.trailheads.length) {
+    const closestTrailhead = findClosestTrailhead(state.puzzle.center);
+    if (closestTrailhead) {
+      state.trailheadMarker = L.marker([closestTrailhead.coords[1], closestTrailhead.coords[0]], {
+        icon: L.icon({
+          iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png",
+          shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+          iconSize: [25, 41],
+          iconAnchor: [12, 41],
+          popupAnchor: [1, -34],
+          shadowSize: [41, 41],
+        }),
+      }).addTo(revealLayer);
+
+      state.trailheadMarker.bindTooltip(closestTrailhead.name, {
+        permanent: false,
+        direction: "top",
+      });
+    }
+  }
+
+  // Apply or remove map rotation based on difficulty
+  const mapElement = document.getElementById("map");
+  if (!difficulty.northUp) {
+    mapElement.classList.add("map-rotated");
+    mapElement.style.transform = `rotate(${state.mapRotation}deg)`;
+  } else {
+    mapElement.classList.remove("map-rotated");
+    mapElement.style.transform = "";
+  }
+
+  // Render property or trail based on game mode
+  if (state.gameMode === "property") {
+    // Property mode: show full polygon outline immediately
+    const polygon = L.polygon(state.puzzle.rings, {
+      color: "#009e73",
+      weight: 3,
+      opacity: 0.8,
+      fill: false,
+    }).addTo(revealLayer);
+
+    // Calculate bounds from rings
+    const bounds = polygon.getBounds();
+    state.puzzle.bounds = [[bounds.getSouth(), bounds.getWest()], [bounds.getNorth(), bounds.getEast()]];
+
+    map.fitBounds(bounds, {
       padding: [24, 24],
       animate: false,
     });
+  } else {
+    // Trail mode: progressive reveal by stages
+    const stageList = difficulty.contiguous ? state.puzzle.stages : state.puzzle.scatteredStages;
+    const stage = stageList[clampedStage - 1];
+
+    const geo = L.geoJSON(stage.geometry, {
+      style: {
+        color: "#0072b2",
+        weight: 5,
+        opacity: 0.95,
+        lineCap: "round",
+      },
+    }).addTo(revealLayer);
+
+    // Keep scale anchored to the final trail footprint, not the currently revealed subset.
+    const fullBounds = state.puzzle.bounds;
+    if (fullBounds) {
+      map.fitBounds(fullBounds, {
+        padding: [24, 24],
+        animate: false,
+      });
+    }
   }
 }
 
@@ -704,10 +1270,11 @@ function refreshUi() {
   dom.attemptsUsed.textContent = String(state.attemptsUsed);
   dom.revealStage.textContent = String(state.revealStage);
 
+  const difficulty = DIFFICULTY[state.difficulty];
   dom.history.innerHTML = "";
   for (const guess of state.guesses) {
     const item = document.createElement("li");
-    if (guess.correct || state.hardMode || !guess.hint) {
+    if (guess.correct || !difficulty.showHints || !guess.hint) {
       item.textContent = guess.text;
     } else {
       item.textContent = `${guess.text} -> ${guess.hint}`;
@@ -730,14 +1297,20 @@ function setHint(message) {
 }
 
 function buildDirectionalHint(fromTrail, targetTrail) {
-  if (!fromTrail || !targetTrail || !fromTrail.center || !targetTrail.center) {
+  if (!fromTrail || !targetTrail) {
     return "Hint unavailable for this guess.";
   }
 
-  const fromLon = fromTrail.center[0];
-  const fromLat = fromTrail.center[1];
-  const targetLon = targetTrail.center[0];
-  const targetLat = targetTrail.center[1];
+  const fromCenter = fromTrail.center || fromTrail.centroid;
+  const targetCenter = targetTrail.center || targetTrail.centroid;
+  if (!fromCenter || !targetCenter) {
+    return "Hint unavailable for this guess.";
+  }
+
+  const fromLon = fromCenter[0];
+  const fromLat = fromCenter[1];
+  const targetLon = targetCenter[0];
+  const targetLat = targetCenter[1];
 
   const averageLatRadians = ((fromLat + targetLat) / 2) * (Math.PI / 180);
   const northSouthMiles = (targetLat - fromLat) * 69.172;
@@ -748,7 +1321,8 @@ function buildDirectionalHint(fromTrail, targetTrail) {
   const nsDistance = formatImperialDistance(Math.abs(northSouthMiles));
   const ewDistance = formatImperialDistance(Math.abs(eastWestMiles));
 
-  return `Hint: target is ${nsDistance} ${nsDirection} and ${ewDistance} ${ewDirection} of ${fromTrail.displayName}.`;
+  const fromName = fromTrail.displayName || fromTrail.name || "your guess";
+  return `Hint: target is ${nsDistance} ${nsDirection} and ${ewDistance} ${ewDirection} of ${fromName}.`;
 }
 
 function formatImperialDistance(miles) {
@@ -844,4 +1418,315 @@ function boundsCenter(bounds) {
   const maxLng = bounds[1][1];
 
   return [(minLng + maxLng) / 2, (minLat + maxLat) / 2];
+}
+
+function showGameEndPanel() {
+  if (!state.puzzle) {
+    return;
+  }
+
+  // Set OSMP trails link (only for trail mode with valid trlId)
+  const trlId = state.puzzle.trlId;
+  if (state.gameMode === "trail" && trlId && /^\d+$/.test(trlId)) {
+    const osmpUrl = `https://experience.arcgis.com/experience/453953e79ff64148821c1187c8ab3edc/page/Trails#data_s=where:dataSource_5-19745beeebf-layer-12:TRLID=${trlId}&zoom_to_selection=true`;
+    dom.osmpLink.href = osmpUrl;
+    dom.osmpLink.parentElement.hidden = false;
+  } else {
+    dom.osmpLink.parentElement.hidden = true;
+  }
+
+  // Show panel
+  dom.gameEndPanel.hidden = false;
+
+  // Calculate initial score (trivia bonus will be added later if applicable)
+  calculateScore();
+  displayScore();
+
+  // Show trivia panel (only for trail mode)
+  if (state.gameMode === "trail") {
+    // Fetch trivia data and show trivia panel
+    fetchTriviaData().then(() => {
+      showTriviaPanel();
+    }).catch((error) => {
+      console.warn("Failed to load trivia data:", error);
+    });
+  }
+}
+
+function showTriviaPanel() {
+  if (state.gameMode !== "trail" || !state.puzzle) {
+    return;
+  }
+
+  state.triviaScore = 0;
+  dom.triviaQuestions.innerHTML = "";
+
+  // Get trail data for trivia (puzzle already has features stored)
+  const trail = state.puzzle;
+  
+  // Find the first feature to get DOGREGGEN field (field name may be fully qualified or short)
+  let dogReg = "Unknown";
+  if (trail.features && trail.features.length > 0) {
+    const trailFeature = trail.features[0];
+    dogReg = trailFeature?.properties?.[FIELD.dogReg]
+      || trailFeature?.properties?.DOGREGGEN
+      || "Unknown";
+  }
+
+  // Prepare trivia questions
+  const questions = [
+    {
+      question: "What is the dog regulation on this trail?",
+      correctAnswer: dogReg,
+      options: generateDogRegOptions(dogReg),
+    },
+    {
+      question: "What management area designation is closest to this trail?",
+      correctAnswer: findClosestManagementArea(),
+      options: generateManagementAreaOptions(),
+    },
+    {
+      question: "What is the closest trailhead to this trail?",
+      correctAnswer: findClosestTrailhead(trail.center)?.name || "Unknown",
+      options: generateTrailheadOptions(),
+    },
+    {
+      question: "Is there a wildlife closure within 500ft of this trail? If so, what species?",
+      correctAnswer: findNearbyWildlifeClosure(),
+      options: ["Bat", "Raptor", "Grassland Bird", "No nearby closure"],
+    },
+  ];
+
+  // Render questions one at a time
+  let currentQuestion = 0;
+  
+  function renderQuestion(index) {
+    if (index >= questions.length) {
+      // All questions answered, show final score
+      dom.triviaScoreDisplay.textContent = `Trivia Score: ${state.triviaScore}/${questions.length}`;
+      dom.triviaScoreDisplay.hidden = false;
+      
+      // Recalculate total score with trivia bonus and update display
+      calculateScore();
+      displayScore();
+      
+      return;
+    }
+
+    const q = questions[index];
+    const questionDiv = document.createElement("div");
+    questionDiv.className = "trivia-question";
+
+    const questionText = document.createElement("p");
+    questionText.textContent = `${index + 1}. ${q.question}`;
+    questionDiv.appendChild(questionText);
+
+    const optionsDiv = document.createElement("div");
+    optionsDiv.className = "trivia-options";
+
+    for (const option of q.options) {
+      const button = document.createElement("button");
+      button.className = "trivia-option";
+      button.textContent = option;
+      button.addEventListener("click", () => {
+        const correct = option === q.correctAnswer;
+        if (correct) {
+          button.classList.add("correct");
+          state.triviaScore += 1;
+        } else {
+          button.classList.add("incorrect");
+          // Highlight the correct answer
+          for (const btn of optionsDiv.querySelectorAll(".trivia-option")) {
+            if (btn.textContent === q.correctAnswer) {
+              btn.classList.add("correct");
+            }
+          }
+        }
+
+        // Disable all buttons
+        for (const btn of optionsDiv.querySelectorAll(".trivia-option")) {
+          btn.disabled = true;
+        }
+
+        // Show next question after a delay
+        setTimeout(() => {
+          renderQuestion(index + 1);
+        }, 1000);
+      });
+      optionsDiv.appendChild(button);
+    }
+
+    questionDiv.appendChild(optionsDiv);
+    dom.triviaQuestions.appendChild(questionDiv);
+  }
+
+  dom.triviaPanel.hidden = false;
+  renderQuestion(0);
+}
+
+function generateDogRegOptions(correctAnswer) {
+  const allOptions = [
+    "Leash Required",
+    "No Dogs",
+    "Leash, Voice and Sight Control",
+    "Regulation Varies",
+    "No Dogs Allowed",
+    "Leash, or Voice & Sight Control",
+  ];
+
+  // Always include the correct answer
+  const options = [correctAnswer];
+  
+  // Add 3 random wrong answers
+  const seed = hashString(state.puzzle.normalizedName + "-dogReg");
+  const rng = createSeededRandom(seed);
+  
+  const shuffled = allOptions.filter((opt) => opt !== correctAnswer).sort(() => rng() - 0.5);
+  for (let i = 0; i < 3 && i < shuffled.length; i++) {
+    options.push(shuffled[i]);
+  }
+
+  // Shuffle final options
+  return options.sort(() => rng() - 0.5);
+}
+
+function findClosestManagementArea() {
+  if (!state.managementAreas.length || !state.puzzle.center) {
+    return "Unknown";
+  }
+
+  let closest = null;
+  let minDistance = Infinity;
+
+  for (const area of state.managementAreas) {
+    const distance = haversineMeters(state.puzzle.center, area.centroid);
+    if (distance < minDistance) {
+      minDistance = distance;
+      closest = area;
+    }
+  }
+
+  return closest?.name || "Unknown";
+}
+
+function generateManagementAreaOptions() {
+  const correctAnswer = findClosestManagementArea();
+  const allAreas = state.managementAreas.map((a) => a.name);
+
+  if (allAreas.length === 0) {
+    return [correctAnswer, "Area A", "Area B", "Area C"];
+  }
+
+  const options = [correctAnswer];
+  const seed = hashString(state.puzzle.normalizedName + "-mgmt");
+  const rng = createSeededRandom(seed);
+
+  const others = allAreas.filter((name) => name !== correctAnswer).sort(() => rng() - 0.5);
+  for (let i = 0; i < 3 && i < others.length; i++) {
+    options.push(others[i]);
+  }
+
+  // If not enough options, add placeholders
+  while (options.length < 4) {
+    options.push(`Area ${options.length}`);
+  }
+
+  return options.sort(() => rng() - 0.5);
+}
+
+function generateTrailheadOptions() {
+  const closestTrailhead = findClosestTrailhead(state.puzzle.center);
+  const correctAnswer = closestTrailhead?.name || "Unknown";
+
+  if (!state.trailheads.length) {
+    return [correctAnswer, "Trailhead A", "Trailhead B", "Trailhead C"];
+  }
+
+  const options = [correctAnswer];
+  const seed = hashString(state.puzzle.normalizedName + "-trailhead");
+  const rng = createSeededRandom(seed);
+
+  const others = state.trailheads
+    .filter((th) => th.name !== correctAnswer)
+    .sort(() => rng() - 0.5);
+
+  for (let i = 0; i < 3 && i < others.length; i++) {
+    options.push(others[i].name);
+  }
+
+  // If not enough options, add placeholders
+  while (options.length < 4) {
+    options.push(`Trailhead ${options.length}`);
+  }
+
+  return options.sort(() => rng() - 0.5);
+}
+
+function findNearbyWildlifeClosure() {
+  if (!state.wildlifeClosures.length || !state.puzzle.center) {
+    return "No nearby closure";
+  }
+
+  const maxDistance = 150; // ~500 feet in meters
+
+  for (const closure of state.wildlifeClosures) {
+    const distance = haversineMeters(state.puzzle.center, closure.centroid);
+    if (distance <= maxDistance) {
+      return closure.species || "Unknown Species";
+    }
+  }
+
+  return "No nearby closure";
+}
+
+function shareScore() {
+  if (!state.puzzle) {
+    return;
+  }
+
+  const dateKey = dom.dateKey.textContent;
+  const difficulty = DIFFICULTY[state.difficulty];
+  const difficultyEmojis = {
+    "young-to-hike": "🌱",
+    "not-too-steep": "🥾",
+    "hike-me-plenty": "⛰️",
+    "ultra-vertical": "🧗",
+    "nighthike": "🌙",
+  };
+  const difficultyEmoji = difficultyEmojis[state.difficulty] || "⛰️";
+  const modeEmoji = state.gameMode === "property" ? "🏞️" : "🥾";
+
+  // Build guess emoji grid
+  const guessEmojis = state.guesses
+    .map((guess) => (guess.correct ? "🟩" : "⬛"))
+    .join("");
+
+  const scoreLines = [
+    `OSMP Traille ${dateKey} ${modeEmoji} ${difficultyEmoji}`,
+    guessEmojis,
+    `Score: ${state.score} (${state.guesses.length}/${MAX_GUESSES} guesses)`,
+    `Difficulty: ${difficulty.label}`,
+  ];
+
+  // Add trivia score if in trail mode
+  if (state.gameMode === "trail" && state.triviaScore > 0) {
+    scoreLines.push(`Trivia: ${state.triviaScore}/4`);
+  }
+
+  const scoreText = scoreLines.join("\n");
+
+  // Copy to clipboard
+  navigator.clipboard
+    .writeText(scoreText)
+    .then(() => {
+      // Show feedback
+      dom.shareFeedback.hidden = false;
+      setTimeout(() => {
+        dom.shareFeedback.hidden = true;
+      }, 2000);
+    })
+    .catch((error) => {
+      console.error("Failed to copy to clipboard:", error);
+      alert("Failed to copy score. Please try again.");
+    });
 }
