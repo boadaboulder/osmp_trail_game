@@ -1,7 +1,7 @@
 # OSMP Traille
 
 Owner: sboada
-Last updated: 2026-05-19
+Last updated: 2026-07-30
 Audience: Developers iterating on the Boulder OSMP daily trail guessing game.
 
 ## Overview
@@ -19,7 +19,7 @@ OSMP Traille is a Wordle-like map game for Boulder Open Space and Mountain Parks
 Scope in this version:
 
 - Static frontend only (HTML, CSS, JS).
-- Live fetch from the City of Boulder ArcGIS trail endpoint with local snapshot fallback.
+- Live fetch from the City of Boulder Open Data trail service with local snapshot fallback.
 - Dissolve/group by normalized trail name and network merging on the client.
 - Full-network reveal ordering with deterministic traversal.
 
@@ -33,7 +33,7 @@ Non-goals in this version:
 ## Prerequisites
 
 - A modern desktop browser.
-- Network access to the ArcGIS endpoint.
+- Network access to the Boulder Open Data-backed ArcGIS service.
 - A local static server.
 - Local snapshot file at data/osmp_trails.geojson for browsers that block cross-origin API calls.
 
@@ -54,7 +54,7 @@ Snapshot refresh (optional but recommended):
 
 1. Run the command below from project root to refresh data/osmp_trails.geojson from the source API.
 
-curl -s 'https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/TrailsNEW/MapServer/4/query?where=1%3D1&outFields=OSMP.TrailsOSMP.OBJECTID,OSMP.TrailsOSMP.TRLID,OSMP.TrailsOSMP.TRAILNAME&returnGeometry=true&outSR=4326&f=geojson' -o data/osmp_trails.geojson
+curl -s 'https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/TrailsNEW/MapServer/4/query?where=1%3D1&outFields=OBJECTID,TRLID,TRAILNAME,DOGREGGEN&returnGeometry=true&outSR=4326&f=geojson' -o data/osmp_trails.geojson
 
 Gameplay rules:
 
@@ -101,12 +101,13 @@ Manual checks:
 ## Troubleshooting
 
 - If map tiles do not render, verify internet access and OpenStreetMap availability.
-- If the game never loads in Firefox but works elsewhere, the ArcGIS endpoint may be blocked by CORS in that browser; the app will fall back to data/osmp_trails.geojson.
+- If the game never loads in Firefox but works elsewhere, the Open Data ArcGIS service may be blocked by CORS in that browser; the app will fall back to data/osmp_trails.geojson.
 - If no puzzle is generated, source data may be empty or malformed.
 - If reveals look odd on highly branched trails, this is expected in v1 full-network mode.
 
 ## References or Ownership
 
+- Canonical API page: https://open-data.bouldercolorado.gov/datasets/Boulder::osmp-trails/api
 - ArcGIS trail layer: https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/TrailsNEW/MapServer/4
 - Query endpoint used by app: https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/TrailsNEW/MapServer/4/query
 - Owner: sboada

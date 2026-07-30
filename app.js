@@ -2,10 +2,10 @@ const STAGE_COUNT = 6;
 const MAX_GUESSES = 6;
 
 const FIELD = {
-  trlId: "OSMP.TrailsOSMP.TRLID",
-  trailName: "OSMP.TrailsOSMP.TRAILNAME",
-  objectId: "OSMP.TrailsOSMP.OBJECTID",
-  dogReg: "OSMP.TrailsOSMP.DOGREGGEN",
+  trlId: ["TRLID", "OSMP.TrailsOSMP.TRLID"],
+  trailName: ["TRAILNAME", "OSMP.TrailsOSMP.TRAILNAME"],
+  objectId: ["OBJECTID", "OSMP.TrailsOSMP.OBJECTID"],
+  dogReg: ["DOGREGGEN", "OSMP.TrailsOSMP.DOGREGGEN"],
 };
 
 const DIFFICULTY = {
@@ -59,10 +59,19 @@ const DIFFICULTY = {
 const API_URL =
   "https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/TrailsNEW/MapServer/4/query" +
   "?where=1%3D1" +
-  "&outFields=OSMP.TrailsOSMP.OBJECTID,OSMP.TrailsOSMP.TRLID,OSMP.TrailsOSMP.TRAILNAME,OSMP.TrailsOSMP.DOGREGGEN" +
+  "&outFields=OBJECTID,TRLID,TRAILNAME,DOGREGGEN" +
   "&returnGeometry=true" +
   "&outSR=4326" +
   "&f=geojson";
+
+function getFirstProperty(properties, fieldNames) {
+  for (const fieldName of fieldNames) {
+    if (properties[fieldName] != null && properties[fieldName] !== "") {
+      return properties[fieldName];
+    }
+  }
+  return undefined;
+}
 
 const PROPERTY_API_URL =
   "https://gis.bouldercolorado.gov/ags_svr2/rest/services/osmp/PropertiesView/MapServer/0/query" +
@@ -285,7 +294,8 @@ async function fetchTrailFeatures() {
 
   try {
     const payload = await fetchFeaturePayload(API_URL);
-    console.log(`[OSMP] Trail API returned ${payload.features.length} features, DOGREGGEN sample: ${payload.features[0]?.properties?.["OSMP.TrailsOSMP.DOGREGGEN"]}`);
+    const dogRegSample = getFirstProperty(payload.features[0]?.properties || {}, FIELD.dogReg);
+    console.log(`[OSMP] Trail API returned ${payload.features.length} features, DOGREGGEN sample: ${dogRegSample || "none"}`);
     return payload.features;
   } catch (error) {
     failures.push(`remote fetch blocked or failed (${error.message})`);
@@ -503,9 +513,9 @@ function buildTrailCatalog(features) {
 
   for (const feature of features) {
     const properties = feature.properties || {};
-    const trailName = String(properties[FIELD.trailName] || "").trim();
-    const trlId = String(properties[FIELD.trlId] || "").trim();
-    const dogReg = String(properties[FIELD.dogReg] || properties.DOGREGGEN || "").trim();
+    const trailName = String(getFirstProperty(properties, FIELD.trailName) || "").trim();
+    const trlId = String(getFirstProperty(properties, FIELD.trlId) || "").trim();
+    const dogReg = String(getFirstProperty(properties, FIELD.dogReg) || "").trim();
     const normalizedName = normalizeName(trailName);
 
     if (!trailName || !normalizedName) {
@@ -583,7 +593,8 @@ function geometryToEdges(features) {
 
   for (const feature of features) {
     const properties = feature.properties || {};
-    const objectId = properties[FIELD.objectId] != null ? String(properties[FIELD.objectId]) : "oid";
+    const objectIdValue = getFirstProperty(properties, FIELD.objectId);
+    const objectId = objectIdValue != null ? String(objectIdValue) : "oid";
     const geometry = feature.geometry;
 
     if (!geometry) {
